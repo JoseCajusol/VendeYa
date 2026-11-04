@@ -1,6 +1,7 @@
+import { useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Image, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Image, Platform, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 
 import { Button, EmptyState } from '@/components/ui';
 import { useStore } from '@/store/useStore';
@@ -11,6 +12,7 @@ import { ticketComoTexto } from '@/utils/ticket';
 export default function TicketScreen() {
   const { id, nuevo } = useLocalSearchParams<{ id: string; nuevo?: string }>();
   const { ventas, clientes, config } = useStore();
+  const [compartirResultado, setCompartirResultado] = useState<'copiado' | 'manual' | 'compartido' | null>(null);
   const venta = ventas.find((v) => v.id === id);
   const m = config.moneda;
 
@@ -20,7 +22,28 @@ export default function TicketScreen() {
 
   const cliente = clientes.find((c) => c.id === venta.clienteId);
 
-  const compartir = () => Share.share({ message: ticketComoTexto(venta, config, cliente?.nombre) });
+  const compartir = async () => {
+    const texto = ticketComoTexto(venta, config, cliente?.nombre);
+
+    if (Platform.OS !== 'web') {
+      await Share.share({ message: texto });
+      return;
+    }
+
+    setCompartirResultado(null);
+
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share({ title: `Ticket #${venta.codigo}`, text: texto });
+        setCompartirResultado('compartido');
+        return;
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') return;
+      }
+    }
+
+    setCompartirResultado((await copiarTextoEnWeb(texto)) ? 'copiado' : 'manual');
+  };
 
   return (
     <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
@@ -77,9 +100,53 @@ export default function TicketScreen() {
       </View>
 
       <Button label="Compartir ticket" icon="share-social-outline" variant="secondary" onPress={compartir} />
+      {compartirResultado === 'copiado' && (
+        <Text style={styles.shareMessage}>Ticket copiado. Ya puedes pegarlo para compartir.</Text>
+      )}
+      {compartirResultado === 'compartido' && <Text style={styles.shareMessage}>Ticket compartido.</Text>}
+      {compartirResultado === 'manual' && (
+        <View style={styles.shareFallback}>
+          <Text style={styles.shareMessage}>No se pudo copiar automáticamente. Selecciona y copia el texto:</Text>
+          <Text selectable style={styles.shareText}>
+            {ticketComoTexto(venta, config, cliente?.nombre)}
+          </Text>
+        </View>
+      )}
       <Button label="Nueva venta" icon="add-circle-outline" onPress={() => router.dismissTo('/')} />
     </ScrollView>
   );
+}
+
+async function copiarTextoEnWeb(texto: string): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(texto);
+      return true;
+    } catch {
+      // Fall through to the browser's legacy clipboard command.
+    }
+  }
+
+  if (typeof document === 'undefined') return false;
+
+  const campo = document.createElement('textarea');
+  campo.value = texto;
+  campo.setAttribute('readonly', '');
+  campo.style.position = 'fixed';
+  campo.style.top = '0';
+  campo.style.left = '0';
+  campo.style.opacity = '0';
+
+  try {
+    document.body.appendChild(campo);
+    campo.focus();
+    campo.select();
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    if (campo.parentNode) campo.parentNode.removeChild(campo);
+  }
 }
 
 function Linea({ label, value }: { label: string; value: string }) {
@@ -118,4 +185,7 @@ const styles = StyleSheet.create({
   itemName: { fontSize: 13, fontWeight: '600', color: colors.text },
   itemTotal: { fontSize: 13, fontWeight: '700', color: colors.text },
   total: { fontSize: 18, fontWeight: '800', color: colors.text },
+  shareFallback: { padding: 12, backgroundColor: colors.surface, borderRadius: radius.md, gap: 8 },
+  shareMessage: { color: colors.textMuted, fontSize: 13, textAlign: 'center' },
+  shareText: { color: colors.text, fontSize: 12 },
 });
