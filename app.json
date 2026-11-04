@@ -31,7 +31,8 @@
           "cameraPermission": "VendeYa necesita acceso a tu cámara para escanear productos."
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true

@@ -1,41 +1,64 @@
-export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+import type { Periodo } from '@/types';
 
-export const codigoTicket = () => Math.random().toString(16).slice(2, 8).toUpperCase();
+export function moneda(valor: number, simbolo = 'S/') {
+  return `${simbolo} ${valor.toFixed(2)}`;
+}
 
-/** Genera un código EAN-13 interno (prefijo 20, reservado para uso interno de tiendas). */
-export const generarCodigoBarras = () => {
-  const base = '20' + Array.from({ length: 10 }, () => Math.floor(Math.random() * 10)).join('');
-  const suma = base
-    .split('')
-    .reduce((acc, d, i) => acc + Number(d) * (i % 2 === 0 ? 1 : 3), 0);
-  return base + ((10 - (suma % 10)) % 10);
-};
+/** Fecha local en formato AAAA-MM-DD (lo que espera la API). */
+export function fechaISO(d: Date = new Date()) {
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
 
-export const dinero = (monto: number, moneda = 'S/') => `${moneda} ${monto.toFixed(2)}`;
+/** Convierte "AAAA-MM-DD" a Date local (sin problemas de zona horaria). */
+export function parseFechaISO(iso: string) {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
 
-export const parseNumero = (texto: string) => {
-  const n = parseFloat(texto.replace(',', '.'));
-  return Number.isFinite(n) ? n : 0;
-};
+/** "2026-11-03 20:02:52" -> "03/11/2026 20:02" */
+export function fechaHora(mysql: string) {
+  const [f, h = ''] = mysql.split(' ');
+  const [y, m, d] = f.split('-');
+  return `${d}/${m}/${y} ${h.slice(0, 5)}`.trim();
+}
 
-export const fechaCorta = (iso: string) => {
-  const d = new Date(iso);
-  return d.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit' });
-};
+export function hora(mysql: string) {
+  return (mysql.split(' ')[1] ?? '').slice(0, 5);
+}
 
-export const horaCorta = (iso: string) => {
-  const d = new Date(iso);
-  return d.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
-};
+export function fechaCorta(mysql: string) {
+  const [y, m, d] = mysql.slice(0, 10).split('-');
+  return `${d}/${m}/${y}`;
+}
 
-export type Periodo = 'hoy' | 'semana' | 'mes' | 'todo';
+/** Mueve la fecha un periodo hacia adelante (+1) o atrás (-1). */
+export function moverFecha(iso: string, periodo: Periodo, paso: 1 | -1) {
+  const d = parseFechaISO(iso);
+  if (periodo === 'diario') d.setDate(d.getDate() + paso);
+  if (periodo === 'semanal') d.setDate(d.getDate() + 7 * paso);
+  if (periodo === 'mensual') {
+    d.setDate(1);
+    d.setMonth(d.getMonth() + paso);
+  }
+  if (periodo === 'anual') d.setFullYear(d.getFullYear() + paso);
+  return fechaISO(d);
+}
 
-export const enPeriodo = (iso: string, periodo: Periodo) => {
-  if (periodo === 'todo') return true;
-  const fecha = new Date(iso);
-  const inicio = new Date();
-  inicio.setHours(0, 0, 0, 0);
-  if (periodo === 'semana') inicio.setDate(inicio.getDate() - 6);
-  if (periodo === 'mes') inicio.setDate(1);
-  return fecha >= inicio;
-};
+/** Inicio del periodo actual, para filtros rápidos del historial. */
+export function inicioDe(periodo: 'hoy' | 'semana' | 'mes') {
+  const d = new Date();
+  if (periodo === 'semana') {
+    const dia = (d.getDay() + 6) % 7; // lunes = 0
+    d.setDate(d.getDate() - dia);
+  }
+  if (periodo === 'mes') d.setDate(1);
+  return fechaISO(d);
+}
+
+/** Acepta "12,50" o "12.50" y devuelve número o NaN. */
+export function aNumero(texto: string) {
+  const limpio = texto.replace(',', '.').trim();
+  return limpio === '' ? NaN : Number(limpio);
+}

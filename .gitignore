@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# VendeYa backend: imágenes subidas (QR de Yape)
+backend/uploads/*
+!backend/uploads/.gitkeep
+!backend/uploads/.htaccess
