@@ -1,204 +1,356 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
+import { Alert, Image, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { BarcodeScanner } from '@/components/BarcodeScanner';
-import { Button, Card, Chip, Field, SectionTitle, Segmented } from '@/components/ui';
-import { useStore } from '@/store/useStore';
-import { colors } from '@/constants/colors';
-import { Producto, UnidadVenta } from '@/infrastructure/interfaces';
-import { generarCodigoBarras, parseNumero, uid } from '@/utils/format';
+import { Boton, Campo, Chip, InsigniaStock, Tarjeta } from '@/components/ui';
+import { colors, radius, spacing } from '@/constants/theme';
+import { api, mensajeError } from '@/services/api';
+import { useAppStore, useUmbral } from '@/store/useAppStore';
+import type { Producto } from '@/types';
+import { aNumero, moneda } from '@/utils/format';
 
-const EMOJIS = ['📦', '🍚', '🥤', '🍪', '🥛', '🧼', '🍅', '🧅', '🍞', '🥚', '🍫', '🧃', '🍺', '🧻'];
+const UNIDADES = ['unidad', 'paquete', 'bolsa', 'botella', 'lata', 'caja', 'kg', 'litro'];
 
-export default function ProductoScreen() {
-  const { id, codigo: codigoParam } = useLocalSearchParams<{ id: string; codigo?: string }>();
-  const { productos, categorias, guardarProducto, eliminarProducto } = useStore();
-  const existente = productos.find((p) => p.id === id);
-  const esNuevo = !existente;
+function formDesde(p?: Producto | null, codigo?: string) {
+  return {
+    codigo_barras: p?.codigo_barras ?? codigo ?? '',
+    nombre: p?.nombre ?? '',
+    descripcion: p?.descripcion ?? '',
+    categoria_id: p?.categoria_id ?? (null as number | null),
+    precio_compra: p?.precio_compra ? String(p.precio_compra) : '',
+    precio_venta: p ? String(p.precio_venta) : '',
+    unidad: p?.unidad ?? 'unidad',
+    stock: p ? String(p.stock) : '',
+  };
+}
 
-  const [codigo, setCodigo] = useState(existente?.codigo ?? codigoParam ?? '');
-  const [nombre, setNombre] = useState(existente?.nombre ?? '');
-  const [descripcion, setDescripcion] = useState(existente?.descripcion ?? '');
-  const [categoriaId, setCategoriaId] = useState(existente?.categoriaId ?? categorias[0]?.id ?? '');
-  const [unidad, setUnidad] = useState<UnidadVenta>(existente?.unidad ?? 'unidad');
-  const [precioCompra, setPrecioCompra] = useState(existente ? String(existente.precioCompra) : '');
-  const [precioVenta, setPrecioVenta] = useState(existente ? String(existente.precioVenta) : '');
-  const [stock, setStock] = useState(existente ? String(existente.stock) : '');
-  const [stockMinimo, setStockMinimo] = useState(existente ? String(existente.stockMinimo) : '5');
-  const [emoji, setEmoji] = useState(existente?.emoji ?? '📦');
-  const [escaneando, setEscaneando] = useState(false);
+export default function ProductoFormScreen() {
+  const { id, codigo } = useLocalSearchParams<{ id: string; codigo?: string }>();
+  const esNuevo = id === 'nuevo';
+  const productos = useAppStore((s) => s.productos);
+  const categorias = useAppStore((s) => s.categorias);
+  const datosCambiaron = useAppStore((s) => s.datosCambiaron);
+  const cargarCategorias = useAppStore((s) => s.cargarCategorias);
+  const codigoEscaneado = useAppStore((s) => s.codigoEscaneado);
+  const setCodigoEscaneado = useAppStore((s) => s.setCodigoEscaneado);
+  const umbral = useUmbral();
 
-  const compra = parseNumero(precioCompra);
-  const venta = parseNumero(precioVenta);
-  const margen = compra > 0 ? ((venta - compra) / compra) * 100 : 0;
+  // Se lee del store: así el stock mostrado se actualiza solo tras ventas y movimientos
+  const productoLocal = esNuevo ? undefined : productos.find((p) => p.id === Number(id));
+  const [productoRemoto, setProductoRemoto] = useState<Producto | null>(null);
+  const producto = productoLocal ?? productoRemoto;
+  const [form, setForm] = useState(() => formDesde(productoLocal, codigo));
+  const [errores, setErrores] = useState<Record<string, string>>({});
+  const [guardando, setGuardando] = useState(false);
+  const [nuevaCategoria, setNuevaCategoria] = useState<string | null>(null);
+  const [imagenSeleccionada, setImagenSeleccionada] = useState<{ uri: string; mimeType: string } | null>(null);
+  const [eliminaraImagen, setEliminaraImagen] = useState(false);
 
-  const guardar = () => {
-    if (!nombre.trim() || !codigo.trim() || venta <= 0) {
-      Alert.alert('Datos incompletos', 'Ingresa el código, el nombre y el precio de venta.');
+  // Si el producto no estaba en memoria, traerlo del servidor
+  const faltaCargar = !esNuevo && !productoLocal;
+  useEffect(() => {
+    if (!faltaCargar) return;
+    api
+      .producto(Number(id))
+      .then((p) => {
+        setProductoRemoto(p);
+        setForm(formDesde(p));
+      })
+      .catch((e) => Alert.alert('Error', mensajeError(e)));
+  }, [faltaCargar, id]);
+
+  // Recibir el código leído por el escáner
+  useFocusEffect(
+    useCallback(() => {
+      if (codigoEscaneado) {
+        setForm((f) => ({ ...f, codigo_barras: codigoEscaneado }));
+        setCodigoEscaneado(null);
+      }
+    }, [codigoEscaneado, setCodigoEscaneado]),
+  );
+
+  const set = (campo: keyof typeof form) => (valor: string) => setForm((f) => ({ ...f, [campo]: valor }));
+
+  const compra = aNumero(form.precio_compra);
+  const venta = aNumero(form.precio_venta);
+  const margen = Number.isFinite(compra) && Number.isFinite(venta) && compra > 0 ? ((venta - compra) / compra) * 100 : null;
+
+  const validar = () => {
+    const e: Record<string, string> = {};
+    if (!form.nombre.trim()) e.nombre = 'Escribe el nombre del producto.';
+    if (!Number.isFinite(venta) || venta <= 0) e.precio_venta = 'Ingresa un precio de venta válido.';
+    if (form.precio_compra.trim() && (!Number.isFinite(compra) || compra < 0)) e.precio_compra = 'Precio de compra inválido.';
+    if (Number.isFinite(compra) && Number.isFinite(venta) && compra > venta) e.precio_venta = 'El precio de venta es menor que el de compra.';
+    if (esNuevo && form.stock.trim() && !/^\d+$/.test(form.stock.trim())) e.stock = 'El stock debe ser un número entero.';
+    const repetido = productos.find((p) => form.codigo_barras.trim() && p.codigo_barras === form.codigo_barras.trim() && p.id !== producto?.id);
+    if (repetido) e.codigo_barras = `Este código ya pertenece a "${repetido.nombre}".`;
+    setErrores(e);
+    return Object.keys(e).length === 0;
+  };
+
+  const seleccionarImagen = async () => {
+    const permiso = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permiso.granted) {
+      Alert.alert('Permiso requerido', 'Permite el acceso a tus fotos para seleccionar una imagen del producto.');
       return;
     }
-    const duplicado = productos.find((p) => p.codigo === codigo.trim() && p.id !== existente?.id);
-    if (duplicado) {
-      Alert.alert('Código repetido', `El código ya pertenece a "${duplicado.nombre}".`);
+    const resultado = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.85,
+    });
+    if (resultado.canceled || !resultado.assets[0]) return;
+    const imagen = resultado.assets[0];
+    const mimeType = imagen.mimeType ?? 'image/jpeg';
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
+      Alert.alert('Formato no permitido', 'Selecciona una imagen JPG, JPEG, PNG o WEBP.');
       return;
     }
-    const producto: Producto = {
-      id: existente?.id ?? uid(),
-      codigo: codigo.trim(),
-      nombre: nombre.trim(),
-      descripcion: descripcion.trim(),
-      categoriaId,
-      unidad,
-      precioCompra: compra,
-      precioVenta: venta,
-      stock: parseNumero(stock),
-      stockMinimo: parseNumero(stockMinimo),
-      emoji,
-      creadoEn: existente?.creadoEn ?? new Date().toISOString(),
+    if ((imagen.fileSize ?? 0) > 5 * 1024 * 1024) {
+      Alert.alert('Imagen demasiado grande', 'La imagen no puede pesar más de 5 MB.');
+      return;
+    }
+    setImagenSeleccionada({ uri: imagen.uri, mimeType });
+    setEliminaraImagen(false);
+  };
+
+  const guardar = async () => {
+    if (!validar()) return;
+    setGuardando(true);
+    const datos = {
+      codigo_barras: form.codigo_barras.trim() || null,
+      nombre: form.nombre.trim(),
+      descripcion: form.descripcion.trim() || null,
+      categoria_id: form.categoria_id,
+      precio_compra: Number.isFinite(compra) ? compra : 0,
+      precio_venta: venta,
+      unidad: form.unidad,
+      ...(esNuevo ? { stock: form.stock.trim() ? parseInt(form.stock, 10) : 0 } : {}),
     };
-    guardarProducto(producto);
-    router.back();
+    try {
+      let guardado = esNuevo ? await api.crearProducto(datos) : await api.actualizarProducto(Number(id), datos);
+      if (imagenSeleccionada) {
+        guardado = await api.subirImagenProducto(guardado.id, imagenSeleccionada.uri, imagenSeleccionada.mimeType);
+      } else if (!esNuevo && eliminaraImagen) {
+        guardado = await api.quitarImagenProducto(guardado.id);
+      }
+      await datosCambiaron();
+      router.back();
+      if (esNuevo && codigo) {
+        Alert.alert('Producto registrado', `¿Agregar "${guardado.nombre}" al carrito?`, [
+          { text: 'No', style: 'cancel' },
+          {
+            text: 'Agregar',
+            onPress: () => {
+              const r = useAppStore.getState().agregarAlCarrito(guardado, 1);
+              if (!r.ok) Alert.alert('No se pudo agregar', r.mensaje);
+            },
+          },
+        ]);
+      }
+    } catch (e) {
+      Alert.alert('No se pudo guardar', mensajeError(e));
+    } finally {
+      setGuardando(false);
+    }
   };
 
   const eliminar = () =>
-    Alert.alert('Eliminar producto', `¿Eliminar "${existente?.nombre}" del inventario?`, [
+    Alert.alert('Eliminar producto', `¿Eliminar "${form.nombre}"? Si tiene ventas, se ocultará pero se conservará el historial.`, [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: () => {
-          if (existente) eliminarProducto(existente.id);
-          router.back();
+        onPress: async () => {
+          try {
+            await api.eliminarProducto(Number(id));
+            useAppStore.getState().quitarDelCarrito(Number(id));
+            await datosCambiaron();
+            router.back();
+          } catch (e) {
+            Alert.alert('No se pudo eliminar', mensajeError(e));
+          }
         },
       },
     ]);
 
+  const crearCategoria = async () => {
+    const nombre = (nuevaCategoria ?? '').trim();
+    if (!nombre) return setNuevaCategoria(null);
+    try {
+      const c = await api.crearCategoria(nombre);
+      await cargarCategorias();
+      setForm((f) => ({ ...f, categoria_id: c.id }));
+      setNuevaCategoria(null);
+    } catch (e) {
+      Alert.alert('No se pudo crear la categoría', mensajeError(e));
+    }
+  };
+
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <Stack.Screen options={{ title: esNuevo ? 'Nuevo Producto' : 'Editar Producto' }} />
-      <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }} keyboardShouldPersistTaps="handled">
-        <Card>
-          <SectionTitle icon="barcode-outline" title="Identificación" />
-          {escaneando && (
-            <View style={{ marginBottom: 12 }}>
-              <BarcodeScanner
-                activo
-                alto={150}
-                onScan={(c) => {
-                  setCodigo(c);
-                  setEscaneando(false);
-                }}
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+      <Stack.Screen options={{ title: esNuevo ? 'Nuevo producto' : 'Editar producto' }} />
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg }} keyboardShouldPersistTaps="handled">
+        <Tarjeta>
+          <Text style={styles.etiqueta}>Imagen del producto</Text>
+          <View style={styles.imagenContenedor}>
+            {imagenSeleccionada || producto?.imagen_url ? (
+              <Image source={{ uri: imagenSeleccionada?.uri ?? producto?.imagen_url ?? undefined }} style={styles.imagen} />
+            ) : (
+              <View style={styles.imagenPredeterminada}>
+                <Ionicons name="image-outline" size={42} color={colors.textMuted} />
+                <Text style={styles.imagenAyuda}>Imagen predeterminada</Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.imagenAcciones}>
+            <Boton titulo={imagenSeleccionada || !producto?.imagen_url ? 'Seleccionar imagen' : 'Reemplazar imagen'} icono="image-outline" variante="secundario" compacto onPress={seleccionarImagen} />
+            {(imagenSeleccionada || producto?.imagen_url) && (
+              <Boton titulo="Eliminar" icono="trash-outline" variante="fantasma" compacto onPress={() => { setImagenSeleccionada(null); setEliminaraImagen(true); }} />
+            )}
+          </View>
+          <Text style={styles.imagenAyuda}>JPG, JPEG, PNG o WEBP · máximo 5 MB</Text>
+        </Tarjeta>
+
+        <Tarjeta>
+          <Campo
+            etiqueta="Código de barras"
+            placeholder="Escanéalo o escríbelo"
+            value={form.codigo_barras}
+            onChangeText={set('codigo_barras')}
+            keyboardType="number-pad"
+            error={errores.codigo_barras}
+            ayuda="Opcional. Si el producto no tiene código, podrás buscarlo por nombre al vender."
+            derecha={
+              <Pressable
+                style={styles.botonEscanear}
+                onPress={() => router.push({ pathname: '/escaner', params: { modo: 'codigo' } })}
+              >
+                <Ionicons name="barcode-outline" size={22} color="#fff" />
+              </Pressable>
+            }
+          />
+          <Campo etiqueta="Nombre *" placeholder="Ej: Gaseosa 500 ml" value={form.nombre} onChangeText={set('nombre')} error={errores.nombre} />
+          <Campo etiqueta="Descripción" placeholder="Opcional" value={form.descripcion} onChangeText={set('descripcion')} />
+
+          <Text style={styles.etiqueta}>Categoría</Text>
+          <View style={styles.chips}>
+            <Chip texto="Sin categoría" activo={form.categoria_id === null} onPress={() => setForm((f) => ({ ...f, categoria_id: null }))} />
+            {categorias.map((c) => (
+              <Chip key={c.id} texto={c.nombre} activo={form.categoria_id === c.id} onPress={() => setForm((f) => ({ ...f, categoria_id: c.id }))} />
+            ))}
+            {nuevaCategoria === null && <Chip texto="Nueva" icono="add" activo={false} onPress={() => setNuevaCategoria('')} />}
+          </View>
+          {nuevaCategoria !== null && (
+            <View style={styles.nuevaCategoria}>
+              <TextInput
+                autoFocus
+                value={nuevaCategoria}
+                onChangeText={setNuevaCategoria}
+                placeholder="Nombre de la categoría"
+                placeholderTextColor={colors.textMuted}
+                style={styles.nuevaCategoriaInput}
+                onSubmitEditing={crearCategoria}
               />
+              <Boton titulo="Crear" compacto onPress={crearCategoria} />
             </View>
           )}
-          <Field
-            label="Código de barras"
-            icon="barcode-outline"
-            value={codigo}
-            onChangeText={setCodigo}
-            keyboardType="number-pad"
-            placeholder="Escanea o escribe el código"
-            right={
-              <View style={{ flexDirection: 'row', gap: 6 }}>
-                <Pressable hitSlop={6} onPress={() => setEscaneando((v) => !v)} style={styles.iconBtn}>
-                  <Ionicons name="scan-outline" size={18} color="#fff" />
-                </Pressable>
-                <Pressable hitSlop={6} onPress={() => setCodigo(generarCodigoBarras())} style={[styles.iconBtn, styles.iconBtnAlt]}>
-                  <Ionicons name="sparkles-outline" size={18} color={colors.primary} />
-                </Pressable>
-              </View>
-            }
-          />
-          <Text style={styles.help}>Usa ✨ para generar un código interno si el producto no tiene uno.</Text>
-          <Field label="Nombre del producto" value={nombre} onChangeText={setNombre} placeholder="Ej. Arroz Costeño 1 kg" />
-          <Field
-            label="Descripción (opcional)"
-            value={descripcion}
-            onChangeText={setDescripcion}
-            placeholder="Marca, presentación, etc."
-          />
-          <Text style={styles.label}>Ícono</Text>
-          <View style={styles.emojiRow}>
-            {EMOJIS.map((e) => (
-              <Pressable key={e} onPress={() => setEmoji(e)} style={[styles.emoji, emoji === e && styles.emojiActive]}>
-                <Text style={{ fontSize: 20 }}>{e}</Text>
-              </Pressable>
-            ))}
-          </View>
-        </Card>
+        </Tarjeta>
 
-        <Card>
-          <SectionTitle icon="pricetags-outline" title="Categoría y venta" />
+        <Tarjeta>
+          <View style={{ flexDirection: 'row', gap: spacing.md }}>
+            <View style={{ flex: 1 }}>
+              <Campo
+                etiqueta="Precio de compra"
+                placeholder="0.00"
+                keyboardType="decimal-pad"
+                value={form.precio_compra}
+                onChangeText={set('precio_compra')}
+                error={errores.precio_compra}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Campo
+                etiqueta="Precio de venta *"
+                placeholder="0.00"
+                keyboardType="decimal-pad"
+                value={form.precio_venta}
+                onChangeText={set('precio_venta')}
+                error={errores.precio_venta}
+              />
+            </View>
+          </View>
+          {margen !== null && Number.isFinite(margen) && (
+            <Text style={{ color: margen >= 0 ? colors.success : colors.danger, marginTop: -4, marginBottom: spacing.md }}>
+              Ganancia por unidad: {moneda(venta - compra)} ({margen.toFixed(0)}%)
+            </Text>
+          )}
+
+          <Text style={styles.etiqueta}>Unidad de venta</Text>
           <View style={styles.chips}>
-            {categorias.map((c) => (
-              <Chip key={c.id} label={c.nombre} active={categoriaId === c.id} onPress={() => setCategoriaId(c.id)} />
+            {UNIDADES.map((u) => (
+              <Chip key={u} texto={u} activo={form.unidad === u} onPress={() => setForm((f) => ({ ...f, unidad: u }))} />
             ))}
           </View>
-          <Text style={[styles.label, { marginTop: 12 }]}>Se vende por</Text>
-          <Segmented
-            value={unidad}
-            onChange={setUnidad}
-            options={[
-              { value: 'unidad', label: 'Unidad', icon: 'cube-outline' },
-              { value: 'kilo', label: 'Kilo', icon: 'scale-outline' },
-            ]}
-          />
-        </Card>
+        </Tarjeta>
 
-        <Card>
-          <SectionTitle
-            icon="cash-outline"
-            title="Precios y stock"
-            right={
-              compra > 0 && venta > 0 ? (
-                <Text style={{ color: margen >= 0 ? colors.accent : colors.danger, fontWeight: '700', fontSize: 12 }}>
-                  Margen {margen.toFixed(0)}%
-                </Text>
-              ) : undefined
-            }
-          />
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            <Field label="Precio compra" keyboardType="decimal-pad" value={precioCompra} onChangeText={setPrecioCompra} placeholder="0.00" />
-            <Field label="Precio venta" keyboardType="decimal-pad" value={precioVenta} onChangeText={setPrecioVenta} placeholder="0.00" />
-          </View>
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            <Field label="Stock actual" keyboardType="decimal-pad" value={stock} onChangeText={setStock} placeholder="0" />
-            <Field label="Stock mínimo" keyboardType="decimal-pad" value={stockMinimo} onChangeText={setStockMinimo} placeholder="5" />
-          </View>
-        </Card>
+        <Tarjeta>
+          {esNuevo ? (
+            <Campo
+              etiqueta="Stock inicial"
+              placeholder="0"
+              keyboardType="number-pad"
+              value={form.stock}
+              onChangeText={set('stock')}
+              error={errores.stock}
+              ayuda={`Te avisaremos cuando queden ${umbral} unidades o menos.`}
+            />
+          ) : (
+            producto && (
+              <View style={{ gap: spacing.sm }}>
+                <Text style={styles.etiqueta}>Stock actual</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: 28, fontWeight: '900', color: colors.text }}>{producto.stock}</Text>
+                  <InsigniaStock stock={producto.stock} umbral={umbral} />
+                </View>
+                <Boton
+                  titulo="Registrar entrada / ajustar stock"
+                  icono="swap-vertical"
+                  variante="secundario"
+                  onPress={() => router.push({ pathname: '/movimiento/[id]', params: { id: String(producto.id) } })}
+                />
+              </View>
+            )
+          )}
+        </Tarjeta>
 
-        <Button label={esNuevo ? 'Registrar producto' : 'Guardar cambios'} icon="save-outline" onPress={guardar} />
-        {!esNuevo && <Button label="Eliminar producto" icon="trash-outline" variant="danger" onPress={eliminar} />}
+        <Boton titulo={esNuevo ? 'Registrar producto' : 'Guardar cambios'} icono="save-outline" cargando={guardando} onPress={guardar} />
+        {!esNuevo && <Boton titulo="Eliminar producto" icono="trash-outline" variante="fantasma" onPress={eliminar} />}
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  iconBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
+  etiqueta: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 6 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.sm },
+  botonEscanear: { backgroundColor: colors.primary, borderRadius: radius.sm, padding: 6 },
+  nuevaCategoria: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
+  nuevaCategoriaInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    minHeight: 40,
+    color: colors.text,
   },
-  iconBtnAlt: { backgroundColor: colors.primaryLight },
-  help: { fontSize: 11, color: colors.textMuted, marginTop: -6, marginBottom: 12 },
-  label: { fontSize: 12, fontWeight: '600', color: colors.textMuted, marginBottom: 6 },
-  emojiRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  emoji: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.background,
-    borderWidth: 1.5,
-    borderColor: 'transparent',
-  },
-  emojiActive: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  imagenContenedor: { alignItems: 'center', marginVertical: spacing.sm },
+  imagen: { width: 180, height: 180, borderRadius: radius.lg, backgroundColor: colors.border },
+  imagenPredeterminada: { width: 180, height: 180, borderRadius: radius.lg, backgroundColor: colors.border, alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  imagenAcciones: { flexDirection: 'row', justifyContent: 'center', gap: spacing.sm, flexWrap: 'wrap' },
+  imagenAyuda: { color: colors.textMuted, fontSize: 12, textAlign: 'center' },
 });

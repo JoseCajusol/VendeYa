@@ -1,41 +1,64 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Tabs } from 'expo-router';
-import { ColorValue } from 'react-native';
+import { router } from 'expo-router';
+import { Tabs } from 'expo-router/js-tabs';
+import type { ComponentProps } from 'react';
+import { Pressable, type ColorValue } from 'react-native';
 
-import { useStore } from '@/store/useStore';
-import { colors } from '@/constants/colors';
+import { useStockBajo } from '@/components/AlertaStock';
+import type { IconName } from '@/components/ui';
+import { colors } from '@/constants/theme';
+import { useAppStore } from '@/store/useAppStore';
 
-type IconName = keyof typeof Ionicons.glyphMap;
+type ColorIcono = ComponentProps<typeof Ionicons>['color'];
 
-const icono =
-  (name: IconName) =>
-  ({ color, size }: { color: ColorValue; size: number }) => <Ionicons name={name} size={size - 2} color={color} />;
+function icono(name: IconName) {
+  return function TabBarIcon({ color, size }: { color: ColorValue; size: number }) {
+    // La barra de pestañas siempre entrega colores en texto (#0F766E), así que la conversión es segura
+    return <Ionicons name={name} size={size} color={color as ColorIcono} />;
+  };
+}
 
 export default function TabsLayout() {
-  const itemsCarrito = useStore((s) => s.carrito.length);
+  const unidadesCarrito = useAppStore((s) => s.carrito.reduce((t, i) => t + i.cantidad, 0));
+  const stockBajo = useStockBajo().length;
+
   return (
     <Tabs
       screenOptions={{
-        headerShown: false,
+        headerStyle: { backgroundColor: colors.primary },
+        headerTintColor: '#fff',
+        headerTitleStyle: { fontWeight: '700' },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textMuted,
         tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
-        tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.border },
+        sceneStyle: { backgroundColor: colors.background },
+        headerRight: () => (
+          <Pressable onPress={() => router.push('/ajustes')} hitSlop={12} style={{ marginRight: 16 }}>
+            <Ionicons name="settings-outline" size={22} color="#fff" />
+          </Pressable>
+        ),
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Venta',
-          tabBarIcon: icono('scan-outline'),
-          tabBarBadge: itemsCarrito > 0 ? itemsCarrito : undefined,
-          tabBarBadgeStyle: { backgroundColor: colors.accent },
+          title: 'Vender',
+          tabBarIcon: icono('cart-outline'),
+          tabBarBadge: unidadesCarrito > 0 ? unidadesCarrito : undefined,
         }}
       />
-      <Tabs.Screen name="catalogo" options={{ title: 'Catálogo', tabBarIcon: icono('grid-outline') }} />
-      <Tabs.Screen name="inventario" options={{ title: 'Inventario', tabBarIcon: icono('cube-outline') }} />
-      <Tabs.Screen name="historial" options={{ title: 'Historial', tabBarIcon: icono('receipt-outline') }} />
-      <Tabs.Screen name="ajustes" options={{ title: 'Ajustes', tabBarIcon: icono('settings-outline') }} />
+      <Tabs.Screen name="productos" options={{ title: 'Productos', tabBarIcon: icono('pricetags-outline') }} />
+      <Tabs.Screen
+        name="inventario"
+        options={{
+          title: 'Inventario',
+          tabBarIcon: icono('cube-outline'),
+          tabBarBadge: stockBajo > 0 ? stockBajo : undefined,
+          tabBarBadgeStyle: { backgroundColor: colors.warning },
+        }}
+      />
+      <Tabs.Screen name="ventas" options={{ title: 'Ventas', tabBarIcon: icono('receipt-outline') }} />
+      <Tabs.Screen name="reportes" options={{ title: 'Reportes', tabBarIcon: icono('bar-chart-outline') }} />
     </Tabs>
   );
 }
