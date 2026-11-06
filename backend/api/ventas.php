@@ -1,13 +1,5 @@
 <?php
-/**
- * /api/ventas.php
- *   GET                         Historial (filtros: desde, hasta, metodo, estado)
- *   GET  ?id=7                  Venta con su detalle (para el ticket)
- *   POST                        Registrar venta y descontar stock:
- *        { items: [{ producto_id, cantidad }], metodo_pago: EFECTIVO|YAPE,
- *          monto_recibido?, observacion? }
- *   POST ?id=7&accion=anular    Anular venta y devolver el stock
- */
+
 require __DIR__ . '/_bootstrap.php';
 
 function normalizarVenta(array $v): array
